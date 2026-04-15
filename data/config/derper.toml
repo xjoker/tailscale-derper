@@ -1,0 +1,17 @@
+[derper]
+tls_mode = "ip"
+host = "203.0.113.10"
+addr = ":443"
+stun = true
+stun_port = 3478
+http_port = -1
+cert_dir = "/var/lib/derper/certs"
+verify_clients = false
+verify_client_url = ""
+
+[dns01]
+provider = "cloudflare"
+email = "ops@example.com"
+acme_path = "/var/lib/derper/acme"
+staging = false
+renewal_interval = 43200
