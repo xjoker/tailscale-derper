@@ -1,0 +1,18 @@
+# Local environment and secret files.
+.env
+.env.*
+!.env.example
+
+# Runtime data created under the default /data mount.
+/data/*
+!/data/config/
+!/data/config/derper.toml
+
+# DERP, TLS, and ACME material should never be committed.
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+tailscaled.state
