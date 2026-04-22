@@ -13,8 +13,7 @@ docker run -d --name derper \
   -p 443:443 -p 3478:3478/udp \
   -e DERP_TLS_MODE=ip \
   -e DERP_HOST=203.0.113.10 \
-  -v $(pwd)/data/config:/data/config \
-  -v $(pwd)/derper-data:/var/lib/derper \
+  -v $(pwd)/derper-data:/data \
   ghcr.io/<owner>/derper:latest
 ```
 
@@ -32,16 +31,43 @@ docker run -d --name derper \
 
 - 示例配置文件：`data/config/derper.toml`
 - 环境变量优先于配置文件
+- 默认关闭 HTTP 80 端口 (`DERP_HTTP_PORT=-1`)
+- 默认 HTTPS 根路径返回空白页 (`DERP_HOME=blank`)
 - `DERP_VERIFY_CLIENTS=true` 时，需保证本机 `tailscaled` 与 `derper` 来自同一 Tailscale revision
 
 ## 安全
 
 容器默认以非 root 用户 `derper` (UID 10000) 运行。`derper` 二进制通过 `setcap cap_net_bind_service` 获得低端口绑定能力。
 
+entrypoint 默认会先以 root 修正 `/data` 权限，然后降权为 `derper` 运行服务。可设置 `DERP_CHOWN_DATA=false` 跳过自动 `chown`。
+
 如果你的容器运行时不支持 `setcap`（如部分 Kubernetes / Podman rootless 环境），可以：
 
 - 使用非特权端口（`DERP_ADDR=:8443`）
 - 或覆盖为 root 用户运行：`docker run --user=root ...`
+
+### 访问限制
+
+仅把 DERP 节点写入 Tailnet DERPMap 不等于访问控制。公网可达时，默认任何知道地址的 Tailscale 客户端都可能尝试连接。
+
+官方访问限制有两种方式：
+
+- `DERP_VERIFY_CLIENTS=true`：通过本机 `tailscaled` 验证客户端，需挂载 tailscaled socket，并确保 `derper` 与 `tailscaled` 来自同一 Tailscale revision
+- `DERP_VERIFY_CLIENT_URL=https://...`：调用外部 admission controller 判断是否允许连接，建议同时保持 `DERP_VERIFY_CLIENT_URL_FAIL_OPEN=false`
+
+使用本机 `tailscaled` 验证时示例：
+
+```bash
+docker run -d --name derper \
+  -p 443:443 -p 3478:3478/udp \
+  -e DERP_TLS_MODE=ip \
+  -e DERP_HOST=203.0.113.10 \
+  -e DERP_VERIFY_CLIENTS=true \
+  -e DERP_SOCKET=/var/run/tailscale/tailscaled.sock \
+  -v /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock \
+  -v $(pwd)/derper-data:/data \
+  ghcr.io/<owner>/derper:latest
+```
 
 ## 证书管理
 

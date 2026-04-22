@@ -2,16 +2,21 @@
 tls_mode = "ip"
 host = "203.0.113.10"
 addr = ":443"
+key_file = "/data/derper.key"
+derp = true
 stun = true
 stun_port = 3478
 http_port = -1
-cert_dir = "/var/lib/derper/certs"
+home = "blank"
+cert_dir = "/data/certs"
 verify_clients = false
 verify_client_url = ""
+verify_client_url_fail_open = false
+socket = ""
 
 [dns01]
 provider = "cloudflare"
 email = "ops@example.com"
-acme_path = "/var/lib/derper/acme"
+acme_path = "/data/acme"
 staging = false
 renewal_interval = 43200

@@ -62,6 +62,18 @@ to_bool() {
   esac
 }
 
+: "${DERP_DATA_DIR:=/data}"
+: "${DERP_CHOWN_DATA:=true}"
+
+if [ "$(id -u)" = "0" ]; then
+  [ "${DERP_DATA_DIR}" != "/" ] || { log "DERP_DATA_DIR 不能设置为 /"; exit 1; }
+  mkdir -p "${DERP_DATA_DIR}"
+  if to_bool "${DERP_CHOWN_DATA}"; then
+    chown -R derper:derper "${DERP_DATA_DIR}"
+  fi
+  exec su-exec derper "$0" "$@"
+fi
+
 # ---------------------------------------------------------------------------
 # lego helper (dns01 mode)
 # ---------------------------------------------------------------------------
@@ -89,12 +101,17 @@ run_lego() {
 set_from_config DERP_TLS_MODE        derper tls_mode
 set_from_config DERP_HOST            derper host
 set_from_config DERP_ADDR            derper addr
+set_from_config DERP_KEY_FILE        derper key_file
+set_from_config DERP_DERP            derper derp
 set_from_config DERP_STUN            derper stun
 set_from_config DERP_STUN_PORT       derper stun_port
 set_from_config DERP_HTTP_PORT       derper http_port
+set_from_config DERP_HOME            derper home
 set_from_config DERP_CERT_DIR        derper cert_dir
 set_from_config DERP_VERIFY_CLIENTS  derper verify_clients
 set_from_config DERP_VERIFY_CLIENT_URL derper verify_client_url
+set_from_config DERP_VERIFY_CLIENT_URL_FAIL_OPEN derper verify_client_url_fail_open
+set_from_config DERP_SOCKET          derper socket
 set_from_config DERP_DNS_PROVIDER    dns01 provider
 set_from_config DERP_ACME_EMAIL      dns01 email
 set_from_config DERP_ACME_PATH       dns01 acme_path
@@ -104,15 +121,20 @@ set_from_config DERP_RENEWAL_INTERVAL dns01 renewal_interval
 : "${DERP_TLS_MODE:=ip}"
 : "${DERP_HOST:=}"
 : "${DERP_ADDR:=:443}"
+: "${DERP_KEY_FILE:=/data/derper.key}"
+: "${DERP_DERP:=true}"
 : "${DERP_STUN:=true}"
 : "${DERP_STUN_PORT:=3478}"
 : "${DERP_HTTP_PORT:=-1}"
-: "${DERP_CERT_DIR:=/var/lib/derper/certs}"
+: "${DERP_HOME:=blank}"
+: "${DERP_CERT_DIR:=/data/certs}"
 : "${DERP_VERIFY_CLIENTS:=false}"
 : "${DERP_VERIFY_CLIENT_URL:=}"
+: "${DERP_VERIFY_CLIENT_URL_FAIL_OPEN:=false}"
+: "${DERP_SOCKET:=}"
 : "${DERP_DNS_PROVIDER:=}"
 : "${DERP_ACME_EMAIL:=}"
-: "${DERP_ACME_PATH:=/var/lib/derper/acme}"
+: "${DERP_ACME_PATH:=/data/acme}"
 : "${DERP_ACME_STAGING:=false}"
 : "${DERP_RENEWAL_INTERVAL:=43200}"
 
@@ -121,7 +143,7 @@ set_from_config DERP_RENEWAL_INTERVAL dns01 renewal_interval
 # ---------------------------------------------------------------------------
 
 [ -n "${DERP_HOST}" ] || { log "DERP_HOST 未设置"; exit 1; }
-mkdir -p "${DERP_CERT_DIR}" "${DERP_ACME_PATH}"
+mkdir -p "$(dirname "${DERP_KEY_FILE}")" "${DERP_CERT_DIR}" "${DERP_ACME_PATH}"
 
 case "${DERP_TLS_MODE}" in
   ip)
@@ -156,8 +178,10 @@ esac
 # normalize booleans for derper flags
 # ---------------------------------------------------------------------------
 
-to_bool "${DERP_STUN}"           && DERP_STUN=true           || DERP_STUN=false
-to_bool "${DERP_VERIFY_CLIENTS}" && DERP_VERIFY_CLIENTS=true || DERP_VERIFY_CLIENTS=false
+to_bool "${DERP_DERP}"                        && DERP_DERP=true                        || DERP_DERP=false
+to_bool "${DERP_STUN}"                        && DERP_STUN=true                        || DERP_STUN=false
+to_bool "${DERP_VERIFY_CLIENTS}"              && DERP_VERIFY_CLIENTS=true              || DERP_VERIFY_CLIENTS=false
+to_bool "${DERP_VERIFY_CLIENT_URL_FAIL_OPEN}" && DERP_VERIFY_CLIENT_URL_FAIL_OPEN=true || DERP_VERIFY_CLIENT_URL_FAIL_OPEN=false
 
 # ---------------------------------------------------------------------------
 # start derper
@@ -168,15 +192,20 @@ log "启动 derper: host=${DERP_HOST} addr=${DERP_ADDR} stun=${DERP_STUN_PORT} m
 case "${DERP_TLS_MODE}" in
   ip)
     set -- derper \
+      "-c=${DERP_KEY_FILE}" \
       "-hostname=${DERP_HOST}" \
       "-a=${DERP_ADDR}" \
       "-certmode=manual" \
       "-certdir=${DERP_CERT_DIR}" \
+      "-derp=${DERP_DERP}" \
       "-stun=${DERP_STUN}" \
       "-stun-port=${DERP_STUN_PORT}" \
       "-http-port=${DERP_HTTP_PORT}" \
+      "-home=${DERP_HOME}" \
       "-verify-clients=${DERP_VERIFY_CLIENTS}"
     [ -n "${DERP_VERIFY_CLIENT_URL}" ] && set -- "$@" "-verify-client-url=${DERP_VERIFY_CLIENT_URL}"
+    [ -n "${DERP_VERIFY_CLIENT_URL}" ] && set -- "$@" "-verify-client-url-fail-open=${DERP_VERIFY_CLIENT_URL_FAIL_OPEN}"
+    [ -n "${DERP_SOCKET}" ] && set -- "$@" "-socket=${DERP_SOCKET}"
     exec "$@"
     ;;
   dns01)
@@ -195,15 +224,20 @@ case "${DERP_TLS_MODE}" in
 
     start_derper() {
       set -- derper \
+        "-c=${DERP_KEY_FILE}" \
         "-hostname=${DERP_HOST}" \
         "-a=${DERP_ADDR}" \
         "-certmode=manual" \
         "-certdir=${DERP_CERT_DIR}" \
+        "-derp=${DERP_DERP}" \
         "-stun=${DERP_STUN}" \
         "-stun-port=${DERP_STUN_PORT}" \
         "-http-port=${DERP_HTTP_PORT}" \
+        "-home=${DERP_HOME}" \
         "-verify-clients=${DERP_VERIFY_CLIENTS}"
       [ -n "${DERP_VERIFY_CLIENT_URL}" ] && set -- "$@" "-verify-client-url=${DERP_VERIFY_CLIENT_URL}"
+      [ -n "${DERP_VERIFY_CLIENT_URL}" ] && set -- "$@" "-verify-client-url-fail-open=${DERP_VERIFY_CLIENT_URL_FAIL_OPEN}"
+      [ -n "${DERP_SOCKET}" ] && set -- "$@" "-socket=${DERP_SOCKET}"
       "$@" &
       DERPER_PID=$!
       log "derper 已启动 (PID ${DERPER_PID})"
