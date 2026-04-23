@@ -1,12 +1,12 @@
 # derper
 
-双模式 Tailscale `derper` 容器：
+双模式 Tailscale `derper` 容器和裸机 Linux 便携包：
 
 - `ip`：适合中国大陆环境，使用官方 `derper` 的 IP 自签证书能力
 - `dns01`：使用 `lego` 通过 DNS-01 获取域名证书，再交给 `derper` 的 `manual` 模式读取
 - 平台：`linux/amd64`、`linux/arm64`
 
-## 运行
+## 容器运行
 
 ```bash
 docker run -d --name derper \
@@ -25,6 +25,46 @@ docker run -d --name derper \
 -e DERP_DNS_PROVIDER=cloudflare
 -e DERP_ACME_EMAIL=ops@example.com
 -e CLOUDFLARE_DNS_API_TOKEN=xxxx
+```
+
+## 裸机 Linux 运行
+
+GitHub Release 会同时发布免安装依赖的便携包：
+
+- `derper-vX.Y.Z-linux-amd64.tar.gz`
+- `derper-vX.Y.Z-linux-arm64.tar.gz`
+
+包内包含 `derper`、`lego`、`install.sh`、`derper-run`、示例配置和 README。默认数据目录仍是 `/data`，并默认读取包内 `derper.toml`、安装后的 `/etc/derper/derper.toml` 或环境变量指定的配置；环境变量优先于配置文件。
+
+推荐用安装脚本部署到 Debian、Ubuntu、CentOS/RHEL/Rocky/AlmaLinux 系列系统。脚本不会调用 `apt`/`yum` 安装依赖；重复执行只更新 `/usr/local/bin` 下的二进制和 runner，不覆盖已有 `/etc/derper/derper.toml`。
+
+```bash
+tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
+cd derper-vX.Y.Z-linux-amd64
+sudo DERP_HOST=203.0.113.10 ./install.sh
+```
+
+首次安装后配置文件位于 `/etc/derper/derper.toml`。如果安装时没有传 `DERP_HOST`，服务会安装但不会启动；编辑配置后运行：
+
+```bash
+sudo systemctl start derper
+```
+
+不安装为系统服务时，也可以直接运行。直接监听 443 通常需要 root：
+
+```bash
+tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
+cd derper-vX.Y.Z-linux-amd64
+sudo DERP_HOST=203.0.113.10 ./derper-run
+```
+
+非 root 直接运行可改用高端口，并把数据放在当前目录：
+
+```bash
+tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
+cd derper-vX.Y.Z-linux-amd64
+mkdir -p data
+DERP_HOST=203.0.113.10 DERP_ADDR=:8443 DERP_DATA_DIR="$PWD/data" ./derper-run
 ```
 
 ## 配置
@@ -103,6 +143,7 @@ docker inspect --format='{{.State.Health.Status}}' derper
 - 每天定时检查 `tailscale/tailscale` 最新 release
 - 如发现新版本，则自动构建并推送到 `ghcr.io/<owner>/derper`
 - 自动产出 `linux/amd64` 与 `linux/arm64` 多架构 manifest
+- 自动产出 `linux/amd64` 与 `linux/arm64` 裸机便携包并上传到 GitHub Release
 - 成功后打一个仓库 tag：`upstream-vX.Y.Z`
 - 可通过 `workflow_dispatch` 手工指定版本或强制重建
 - 所有 GitHub Actions 均通过 commit SHA 锁定，防止供应链攻击

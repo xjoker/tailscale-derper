@@ -7,6 +7,10 @@ set -eu
 
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
+SCRIPT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+PATH="${SCRIPT_DIR}:${PATH}"
+export PATH
+
 read_toml() {
   [ -f "${DERPER_CONFIG_FILE}" ] || return 0
   awk -v section="$1" -v key="$2" '
@@ -64,14 +68,57 @@ to_bool() {
 
 : "${DERP_DATA_DIR:=/data}"
 : "${DERP_CHOWN_DATA:=true}"
+: "${DERP_CHOWN_TO:=}"
+: "${DERP_DROP_PRIVILEGES:=auto}"
+: "${DERPER_BIN:=derper}"
+: "${LEGO_BIN:=lego}"
+
+if [ -z "${DERPER_CONFIG_FILE:-}" ]; then
+  if [ -f "${SCRIPT_DIR}/derper.toml" ]; then
+    DERPER_CONFIG_FILE="${SCRIPT_DIR}/derper.toml"
+  elif [ -f /etc/derper/derper.toml ]; then
+    DERPER_CONFIG_FILE=/etc/derper/derper.toml
+  else
+    DERPER_CONFIG_FILE="${DERP_DATA_DIR}/config/derper.toml"
+  fi
+  export DERPER_CONFIG_FILE
+fi
 
 if [ "$(id -u)" = "0" ]; then
   [ "${DERP_DATA_DIR}" != "/" ] || { log "DERP_DATA_DIR 不能设置为 /"; exit 1; }
   mkdir -p "${DERP_DATA_DIR}"
+
+  drop_privileges=false
+  case "$(printf '%s' "${DERP_DROP_PRIVILEGES}" | tr '[:upper:]' '[:lower:]')" in
+    true|1|yes)
+      command -v su-exec >/dev/null 2>&1 || { log "DERP_DROP_PRIVILEGES=true 需要 su-exec"; exit 1; }
+      id derper >/dev/null 2>&1 || { log "DERP_DROP_PRIVILEGES=true 需要 derper 用户"; exit 1; }
+      drop_privileges=true
+      ;;
+    auto)
+      if command -v su-exec >/dev/null 2>&1 && id derper >/dev/null 2>&1; then
+        drop_privileges=true
+      fi
+      ;;
+    false|0|no)
+      ;;
+    *)
+      log "不支持的 DERP_DROP_PRIVILEGES: ${DERP_DROP_PRIVILEGES}"
+      exit 1
+      ;;
+  esac
+
   if to_bool "${DERP_CHOWN_DATA}"; then
-    chown -R derper:derper "${DERP_DATA_DIR}"
+    if [ "${drop_privileges}" = "true" ]; then
+      chown -R derper:derper "${DERP_DATA_DIR}"
+    elif [ -n "${DERP_CHOWN_TO}" ]; then
+      chown -R "${DERP_CHOWN_TO}" "${DERP_DATA_DIR}"
+    fi
   fi
-  exec su-exec derper "$0" "$@"
+
+  if [ "${drop_privileges}" = "true" ]; then
+    exec su-exec derper "$0" "$@"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -79,7 +126,7 @@ fi
 # ---------------------------------------------------------------------------
 
 run_lego() {
-  set -- lego --accept-tos --email "${DERP_ACME_EMAIL}" --dns "${DERP_DNS_PROVIDER}" \
+  set -- "${LEGO_BIN}" --accept-tos --email "${DERP_ACME_EMAIL}" --dns "${DERP_DNS_PROVIDER}" \
     --domains "${DERP_HOST}" --path "${DERP_ACME_PATH}"
   to_bool "${DERP_ACME_STAGING}" && set -- "$@" --server "https://acme-staging-v02.api.letsencrypt.org/directory"
 
@@ -150,11 +197,15 @@ case "${DERP_TLS_MODE}" in
     is_ip "${DERP_HOST}" || { log "ip 模式要求 DERP_HOST 为 IP 地址"; exit 1; }
     CERT_FILE="${DERP_CERT_DIR}/${DERP_HOST}.crt"
     if [ -f "${CERT_FILE}" ]; then
-      FP="$(openssl x509 -in "${CERT_FILE}" -outform DER 2>/dev/null \
-        | openssl dgst -sha256 -binary \
-        | base64)"
-      log "现有证书 SHA-256 指纹: ${FP}"
-      log "DERPMap 配置: \"CertName\": \"sha256-raw:${FP}\""
+      if command -v openssl >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
+        FP="$(openssl x509 -in "${CERT_FILE}" -outform DER 2>/dev/null \
+          | openssl dgst -sha256 -binary \
+          | base64)"
+        log "现有证书 SHA-256 指纹: ${FP}"
+        log "DERPMap 配置: \"CertName\": \"sha256-raw:${FP}\""
+      else
+        log "现有证书已存在；未检测到 openssl/base64，跳过指纹输出"
+      fi
     else
       log "首次运行，derper 将生成 IP 自签证书"
       log "重启后可在此处查看指纹，或运行: docker logs <container> | grep sha256-raw"
@@ -191,7 +242,7 @@ log "启动 derper: host=${DERP_HOST} addr=${DERP_ADDR} stun=${DERP_STUN_PORT} m
 
 case "${DERP_TLS_MODE}" in
   ip)
-    set -- derper \
+    set -- "${DERPER_BIN}" \
       "-c=${DERP_KEY_FILE}" \
       "-hostname=${DERP_HOST}" \
       "-a=${DERP_ADDR}" \
@@ -223,7 +274,7 @@ case "${DERP_TLS_MODE}" in
     trap cleanup TERM INT
 
     start_derper() {
-      set -- derper \
+      set -- "${DERPER_BIN}" \
         "-c=${DERP_KEY_FILE}" \
         "-hostname=${DERP_HOST}" \
         "-a=${DERP_ADDR}" \

@@ -10,7 +10,7 @@ ARG TARGETOS
 ARG TARGETARCH
 RUN mkdir -p /out && \
     GOTOOLCHAIN=auto GOPATH=/tmp/gopath GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 \
-    go install tailscale.com/cmd/derper@${TAILSCALE_VERSION} && \
+    go install -trimpath -ldflags="-s -w" tailscale.com/cmd/derper@${TAILSCALE_VERSION} && \
     bin="/tmp/gopath/bin/derper" && \
     [ -f "${bin}" ] || bin="/tmp/gopath/bin/${TARGETOS}_${TARGETARCH}/derper" && \
     install -m 0755 "${bin}" /out/derper
@@ -28,6 +28,15 @@ RUN case "${TARGETARCH}" in amd64|arm64) ;; *) echo "unsupported arch: ${TARGETA
       "https://github.com/go-acme/lego/releases/download/${LEGO_VERSION}/lego_${LEGO_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" && \
     tar -xzf /tmp/lego.tar.gz lego && \
     install -m 0755 lego /out/lego
+
+FROM scratch AS portable
+COPY --from=derper-builder /out/derper /derper
+COPY --from=lego-builder /out/lego /lego
+COPY --chmod=0755 docker/entrypoint.sh /derper-run
+COPY --chmod=0755 packaging/standalone/install.sh /install.sh
+COPY data/config/derper.toml /derper.toml
+COPY .env.example /env.example
+COPY README.md /README.md
 
 FROM alpine:${ALPINE_VERSION}
 ARG TAILSCALE_VERSION

@@ -78,6 +78,42 @@ jobs:
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - if: steps.marker.outputs.skip == 'false'
+        name: Build standalone Linux bundles
+        env:
+          TAILSCALE_VERSION: ${{ steps.versions.outputs.tailscale }}
+          LEGO_VERSION: ${{ steps.versions.outputs.lego }}
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+          : > dist/SHA256SUMS
+
+          for arch in amd64 arm64; do
+            rootfs="dist/rootfs-${arch}"
+            package="derper-${TAILSCALE_VERSION}-linux-${arch}"
+
+            docker buildx build \
+              --platform "linux/${arch}" \
+              --target portable \
+              --build-arg "TAILSCALE_VERSION=${TAILSCALE_VERSION}" \
+              --build-arg "LEGO_VERSION=${LEGO_VERSION}" \
+              --output "type=local,dest=${rootfs}" \
+              .
+
+            mkdir -p "dist/${package}"
+            cp -a "${rootfs}/derper" "dist/${package}/derper"
+            cp -a "${rootfs}/lego" "dist/${package}/lego"
+            cp -a "${rootfs}/derper-run" "dist/${package}/derper-run"
+            cp -a "${rootfs}/install.sh" "dist/${package}/install.sh"
+            cp -a "${rootfs}/derper.toml" "dist/${package}/derper.toml"
+            cp -a "${rootfs}/env.example" "dist/${package}/env.example"
+            cp -a "${rootfs}/README.md" "dist/${package}/README.md"
+
+            tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+            ( cd dist && sha256sum "${package}.tar.gz" >> SHA256SUMS )
+          done
+
+      - if: steps.marker.outputs.skip == 'false'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -104,8 +140,36 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.marker.outputs.tag }}"
-          git push origin "${{ steps.marker.outputs.tag }}"
+          git tag -f "${{ steps.marker.outputs.tag }}"
+          git push --force origin "${{ steps.marker.outputs.tag }}"
+
+      - if: steps.marker.outputs.skip == 'false'
+        name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.marker.outputs.tag }}
+          TAILSCALE_VERSION: ${{ steps.versions.outputs.tailscale }}
+          LEGO_VERSION: ${{ steps.versions.outputs.lego }}
+        run: |
+          set -euo pipefail
+          cat > dist/release-notes.md <<EOF
+          Tailscale derper ${TAILSCALE_VERSION}
+
+          Assets:
+          - ghcr.io/${{ github.repository_owner }}/derper:${TAILSCALE_VERSION}
+          - derper-${TAILSCALE_VERSION}-linux-amd64.tar.gz
+          - derper-${TAILSCALE_VERSION}-linux-arm64.tar.gz
+
+          Bundles include derper, lego ${LEGO_VERSION}, install.sh, the portable runner, and sample configuration.
+          EOF
+
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/*.tar.gz dist/SHA256SUMS --clobber
+          else
+            gh release create "${RELEASE_TAG}" dist/*.tar.gz dist/SHA256SUMS \
+              --title "derper ${TAILSCALE_VERSION}" \
+              --notes-file dist/release-notes.md
+          fi
 
       - if: steps.marker.outputs.skip == 'true'
         run: echo "No new upstream release."
