@@ -60,31 +60,23 @@ GitHub Release 会同时发布免安装依赖的便携包：
 - `derper-vX.Y.Z-linux-amd64.tar.gz`
 - `derper-vX.Y.Z-linux-arm64.tar.gz`
 
-包内包含 `derper`、`lego`、`install.sh`、`derper-run`、示例配置和 README。默认数据目录仍是 `/data`，并默认读取包内 `derper.toml`、安装后的 `/etc/derper/derper.toml` 或环境变量指定的配置；环境变量优先于配置文件。
+包内含 `derper`、`lego`、`install.sh`、`derper-run`、示例配置。安装走向导，
+不需要预先准备环境变量；详见上文「裸机一键起步」。安装后：
 
-推荐用安装脚本部署到 Debian、Ubuntu、CentOS/RHEL/Rocky/AlmaLinux 系列系统。脚本不会调用 `apt`/`yum` 安装依赖；重复执行只更新 `/usr/local/bin` 下的二进制和 runner，不覆盖已有 `/etc/derper/derper.toml`。
+- 配置文件：`/etc/derper/derper.toml`
+- 凭据文件：`/etc/derper/derper.env`（0600，含 DNS-01 token）
+- 数据目录：`/data`（证书、ACME 缓存）
+- systemd 服务：`derper.service`，开机自启
 
-```bash
-tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
-cd derper-vX.Y.Z-linux-amd64
-sudo DERP_HOST=203.0.113.10 ./install.sh
-```
-
-首次安装后配置文件位于 `/etc/derper/derper.toml`。如果安装时没有传 `DERP_HOST`，服务会安装但不会启动；编辑配置后运行：
+子命令：
 
 ```bash
-sudo systemctl start derper
+sudo ./install.sh             # 向导式安装/重装
+sudo ./install.sh check       # 体检 + DERPMap 片段
+sudo ./install.sh uninstall   # 停服务、移除 binaries（保留配置和数据）
 ```
 
-不安装为系统服务时，也可以直接运行。直接监听 443 通常需要 root：
-
-```bash
-tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
-cd derper-vX.Y.Z-linux-amd64
-sudo DERP_HOST=203.0.113.10 ./derper-run
-```
-
-非 root 直接运行可改用高端口，并把数据放在当前目录：
+不接 systemd 直接前台跑（调试用），可改用高端口绕开 root：
 
 ```bash
 tar -xzf derper-vX.Y.Z-linux-amd64.tar.gz
