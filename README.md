@@ -6,6 +6,32 @@
 - `dns01`：使用 `lego` 通过 DNS-01 获取域名证书，再交给 `derper` 的 `manual` 模式读取
 - 平台：`linux/amd64`、`linux/arm64`
 
+## 裸机一键起步
+
+低配置 Linux（Debian/Ubuntu/RHEL 系，1C512M 起）。下面这段会调 GitHub API 解析最新
+release，按当前 CPU 架构（`amd64` / `arm64`）自动挑包，不需要手填版本号：
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+URL=$(curl -fsSL https://api.github.com/repos/<owner>/derper/releases/latest \
+  | grep -oE "https://[^\"]*linux-${ARCH}\.tar\.gz" | head -n1)
+curl -fsSLO "$URL" && tar -xzf "$(basename "$URL")" && cd derper-*-linux-${ARCH}
+sudo ./install.sh                     # 全交互向导，零参数
+```
+
+> 把 `<owner>` 换成实际 GitHub 仓库 owner。未登录调用 GitHub API 有每小时 60 次限频，
+> 调试时可加 `-H "Authorization: Bearer $GH_TOKEN"` 提到 5000 次。
+
+向导会问 TLS 模式（`ip` / `dns01`）、自动探测公网 IP、按需问域名 / DNS provider / API token，
+最后写 systemd 单元并启动。装完跑一句体检：
+
+```bash
+sudo ./install.sh check               # 在解压目录里执行
+```
+
+输出包含证书 SHA-256 指纹和可粘贴到 Tailnet ACL 的 `DERPMap` 片段。卸载用
+`sudo ./install.sh uninstall`（保留 `/etc/derper` 和 `/data`）。
+
 ## 容器运行
 
 ```bash
