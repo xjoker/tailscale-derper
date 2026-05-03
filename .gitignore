@@ -16,3 +16,6 @@
 *.p12
 *.pfx
 tailscaled.state
+
+# Per-developer Claude Code state.
+.claude/
