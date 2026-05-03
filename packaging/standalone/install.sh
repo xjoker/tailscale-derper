@@ -114,12 +114,14 @@ cmd_check() {
   log "env:     ${ENV_FILE} $([ -f "${ENV_FILE}" ] && echo OK || echo '(none)')"
   log "data:    ${DATA_DIR} $([ -d "${DATA_DIR}" ] && echo OK || echo MISSING)"
 
-  host=""; mode=""; addr=":443"
+  host=""; mode=""; addr=":443"; stun_port="3478"
   if [ -f "${CONFIG_FILE}" ]; then
     host="$(awk -F'=' '/^[[:space:]]*host[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
     mode="$(awk -F'=' '/^[[:space:]]*tls_mode[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
     a="$(awk -F'=' '/^[[:space:]]*addr[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
     [ -n "${a}" ] && addr="${a}"
+    sp="$(awk -F'=' '/^[[:space:]]*stun_port[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
+    [ -n "${sp}" ] && stun_port="${sp}"
   fi
   verify=""; sock=""
   if [ -f "${CONFIG_FILE}" ]; then
@@ -129,6 +131,7 @@ cmd_check() {
   log "host:    ${host:-(unset)}"
   log "mode:    ${mode:-(unset)}"
   log "addr:    ${addr}"
+  log "stun:    :${stun_port}/udp"
   if [ "${verify}" = "true" ]; then
     if [ -n "${sock}" ] && [ -S "${sock}" ]; then
       log "access:  PRIVATE (verify_clients via ${sock} OK)"
@@ -162,7 +165,7 @@ cmd_check() {
       log "DERPMap snippet:"
       log "  \"DERPMap\": { \"Regions\": { \"900\": { \"RegionID\": 900, \"RegionCode\": \"custom\", \"Nodes\": ["
       log "    { \"Name\": \"1\", \"RegionID\": 900, \"HostName\": \"${host}\", \"IPv4\": \"${host}\","
-      log "      \"DERPPort\": ${port}, \"CertName\": \"sha256-raw:${fp}\" }"
+      log "      \"DERPPort\": ${port}, \"STUNPort\": ${stun_port}, \"CertName\": \"sha256-raw:${fp}\" }"
       log "  ] } } }"
     fi
   fi
