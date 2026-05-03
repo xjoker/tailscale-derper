@@ -99,7 +99,7 @@ cmd_uninstall() {
     systemctl daemon-reload 2>/dev/null || true
     log "已移除 ${SERVICE_FILE}"
   fi
-  rm -f "${BIN_DIR}/derper" "${BIN_DIR}/lego" "${BIN_DIR}/derper-run"
+  rm -f "${BIN_DIR}/derper" "${BIN_DIR}/lego" "${BIN_DIR}/derper-run" "${BIN_DIR}/derper-installer"
   log "已移除 ${BIN_DIR} 下的 binaries"
   log "保留 ${CONFIG_DIR} 与 ${DATA_DIR}（如需彻底清理: sudo rm -rf ${CONFIG_DIR} ${DATA_DIR}）"
 }
@@ -163,13 +163,13 @@ wizard_host() {
   log "[1] derper 节点对外的 IP 或域名"
   log "    - 输入 IP        → 自签证书模式（无需域名，适合纯 IP 节点）"
   log "    - 输入域名       → Let's Encrypt + DNS-01 自动申请证书"
-  guess=""
-  if [ -z "${DERP_HOST:-}" ]; then
-    guess="$(detect_public_ip || true)"
-    [ -n "${guess}" ] && log "    检测到本机公网 IP: ${guess}"
+  default="${DERP_HOST:-}"
+  if [ -z "${default}" ]; then
+    default="$(detect_public_ip || true)"
+    [ -n "${default}" ] && log "    检测到本机公网 IP: ${default}"
   fi
   while :; do
-    DERP_HOST="$(ask "    IP 或域名" "${DERP_HOST:-${guess}}")"
+    DERP_HOST="$(ask "    IP 或域名" "${default}")"
     if [ -z "${DERP_HOST}" ]; then
       log "    不能为空"
       continue
@@ -185,6 +185,62 @@ wizard_host() {
     else
       log "    格式无效，请输入 IPv4/IPv6 或域名"
     fi
+  done
+}
+
+ask_port() {
+  prompt="$1"; default="$2"
+  while :; do
+    p="$(ask "${prompt}" "${default}")"
+    case "${p}" in
+      ''|*[!0-9]*) log "    端口必须为数字"; continue ;;
+    esac
+    if [ "${p}" -ge 1 ] 2>/dev/null && [ "${p}" -le 65535 ]; then
+      printf '%s' "${p}"; return 0
+    fi
+    log "    端口必须在 1-65535 之间"
+  done
+}
+
+port_in_use() {
+  proto="$1"; port="$2"
+  command -v ss >/dev/null 2>&1 || return 1
+  case "${proto}" in
+    tcp) ss -lntH 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}$" ;;
+    udp) ss -lnuH 2>/dev/null | awk '{print $4}' | grep -Eq ":${port}$" ;;
+  esac
+}
+
+wizard_ports() {
+  log ""
+  log "[2] HTTPS 监听端口（DERP 流量）"
+  log "    443 是默认；被占用时可改 8443/8444 等。Tailscale 节点需在 DERPMap 用同一端口"
+  default_addr="${DERP_ADDR:-:443}"
+  default_port="${default_addr#*:}"
+  while :; do
+    p="$(ask_port "    端口" "${default_port}")"
+    if port_in_use tcp "${p}"; then
+      log "    警告: TCP :${p} 当前已被占用，启动会失败"
+      ans="$(ask "    仍使用该端口？[y/N]" "N")"
+      case "${ans}" in y|Y|yes|YES) ;; *) continue ;; esac
+    fi
+    DERP_ADDR=":${p}"
+    break
+  done
+
+  log ""
+  log "[3] STUN 端口（UDP，NAT 探测）"
+  log "    3478 是默认；同一公网 IP 跑多个 derper 时改成不同端口"
+  default_stun="${DERP_STUN_PORT:-3478}"
+  while :; do
+    sp="$(ask_port "    端口" "${default_stun}")"
+    if port_in_use udp "${sp}"; then
+      log "    警告: UDP :${sp} 当前已被占用，启动会失败"
+      ans="$(ask "    仍使用该端口？[y/N]" "N")"
+      case "${ans}" in y|Y|yes|YES) ;; *) continue ;; esac
+    fi
+    DERP_STUN_PORT="${sp}"
+    break
   done
 }
 
@@ -218,18 +274,37 @@ wizard_dns01() {
   done
 
   log ""
-  log "[3] 凭据"
-  PRIMARY_VAL="$(ask_secret "    ${PRIMARY}")"
+  log "[2.1] 凭据"
+  existing="$(eval printf '%s' \"\${${PRIMARY}:-}\")"
+  if [ -n "${existing}" ]; then
+    ans="$(ask "    检测到现有 ${PRIMARY}，沿用？[Y/n]" "Y")"
+    case "${ans}" in
+      n|N|no|NO) PRIMARY_VAL="$(ask_secret "    ${PRIMARY}")" ;;
+      *)         PRIMARY_VAL="${existing}" ;;
+    esac
+  else
+    PRIMARY_VAL="$(ask_secret "    ${PRIMARY}")"
+  fi
   [ -z "${PRIMARY_VAL}" ] && die "凭据不能为空"
+
   SEC_PAIRS=""
   for v in ${SECONDARIES}; do
-    val="$(ask_secret "    ${v}")"
+    existing="$(eval printf '%s' \"\${${v}:-}\")"
+    if [ -n "${existing}" ]; then
+      ans="$(ask "    检测到现有 ${v}，沿用？[Y/n]" "Y")"
+      case "${ans}" in
+        n|N|no|NO) val="$(ask_secret "    ${v}")" ;;
+        *)         val="${existing}" ;;
+      esac
+    else
+      val="$(ask_secret "    ${v}")"
+    fi
     SEC_PAIRS="${SEC_PAIRS}${v}=${val}
 "
   done
 
   log ""
-  log "[4] Let's Encrypt 联系邮箱（仅用于续期失败通知）"
+  log "[2.2] Let's Encrypt 联系邮箱（仅用于续期失败通知）"
   while :; do
     DERP_ACME_EMAIL="$(ask "    邮箱" "${DERP_ACME_EMAIL:-}")"
     [ -n "${DERP_ACME_EMAIL}" ] && break
@@ -238,12 +313,19 @@ wizard_dns01() {
 }
 
 wizard_start() {
-  default_yn="Y"
-  ans="$(ask "立即启动 systemd 服务？ [Y/n]" "${default_yn}")"
+  ans="$(ask "立即启动 systemd 服务？[Y/n]" "Y")"
   case "${ans}" in
     n|N|no|NO) START_NOW=false ;;
     *)         START_NOW=true ;;
   esac
+}
+
+load_existing_env() {
+  [ -f "${ENV_FILE}" ] || return 0
+  set -a
+  # shellcheck disable=SC1090
+  . "${ENV_FILE}" 2>/dev/null || true
+  set +a
 }
 
 # ---------------------------------------------------------------------------
@@ -268,6 +350,14 @@ cmd_install() {
   mkdir -p "${BIN_DIR}" "${CONFIG_DIR}" "${DATA_DIR}" \
     "${DATA_DIR}/certs" "${DATA_DIR}/acme" "${DATA_DIR}/cache"
 
+  # 覆盖安装：先停旧服务，避免端口被自己占住造成探测误报
+  if command -v systemctl >/dev/null 2>&1 && [ -f "${SERVICE_FILE}" ]; then
+    if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
+      systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+      log "已停止旧 ${SERVICE_NAME}.service，将以新配置启动"
+    fi
+  fi
+
   copy_exec() {
     src="$1"; dest="$2"; tmp="${dest}.tmp.$$"
     cp "${src}" "${tmp}"; chmod 0755 "${tmp}"; mv -f "${tmp}" "${dest}"
@@ -275,11 +365,14 @@ cmd_install() {
   copy_exec "${SCRIPT_DIR}/derper"     "${BIN_DIR}/derper"
   copy_exec "${SCRIPT_DIR}/lego"       "${BIN_DIR}/lego"
   copy_exec "${SCRIPT_DIR}/derper-run" "${BIN_DIR}/derper-run"
+  copy_exec "${SCRIPT_DIR}/install.sh" "${BIN_DIR}/derper-installer"
   log "已更新 ${BIN_DIR} 下的 binaries"
 
   # ---- decide: wizard or batch ----
+  load_existing_env
   PRIMARY=""; PRIMARY_VAL=""; SEC_PAIRS=""; DERP_TLS_MODE=""
   : "${DERP_HOST:=}"; : "${DERP_DNS_PROVIDER:=}"; : "${DERP_ACME_EMAIL:=}"
+  : "${DERP_ADDR:=}"; : "${DERP_STUN_PORT:=}"
   START_NOW=true
 
   if to_bool "${DERP_AUTO:-}"; then
@@ -291,10 +384,19 @@ cmd_install() {
       [ -n "${DERP_DNS_PROVIDER}" ] || die "dns01 模式需要 DERP_DNS_PROVIDER"
       [ -n "${DERP_ACME_EMAIL}" ]   || die "dns01 模式需要 DERP_ACME_EMAIL"
     fi
+    : "${DERP_ADDR:=:443}"
+    : "${DERP_STUN_PORT:=3478}"
   else
     [ -r /dev/tty ] || die "向导需要 tty；批量部署请用 DERP_AUTO=1（见脚本顶部注释）"
-    hr; log "derper 安装向导"; hr
+    hr
+    if [ -f "${ENV_FILE}" ]; then
+      log "derper 安装向导（检测到现有配置，回车保留旧值）"
+    else
+      log "derper 安装向导"
+    fi
+    hr
     wizard_host
+    wizard_ports
     if [ "${DERP_TLS_MODE}" = "dns01" ]; then
       wizard_dns01
     fi
@@ -309,8 +411,10 @@ cmd_install() {
   fi
   tmp="${CONFIG_FILE}.tmp.$$"
   sed \
-    -e "s/^host[[:space:]]*=.*/host = \"${DERP_HOST}\"/" \
-    -e "s/^tls_mode[[:space:]]*=.*/tls_mode = \"${DERP_TLS_MODE}\"/" \
+    -e "s|^host[[:space:]]*=.*|host = \"${DERP_HOST}\"|" \
+    -e "s|^tls_mode[[:space:]]*=.*|tls_mode = \"${DERP_TLS_MODE}\"|" \
+    -e "s|^addr[[:space:]]*=.*|addr = \"${DERP_ADDR}\"|" \
+    -e "s|^stun_port[[:space:]]*=.*|stun_port = ${DERP_STUN_PORT}|" \
     "${CONFIG_FILE}" > "${tmp}"
   mv -f "${tmp}" "${CONFIG_FILE}"
   log "写入配置 ${CONFIG_FILE}"
@@ -322,6 +426,8 @@ cmd_install() {
     echo "# 由 install.sh 生成；含 DNS-01 凭据，保持 mode 0600"
     echo "DERP_TLS_MODE=${DERP_TLS_MODE}"
     echo "DERP_HOST=${DERP_HOST}"
+    echo "DERP_ADDR=${DERP_ADDR}"
+    echo "DERP_STUN_PORT=${DERP_STUN_PORT}"
     if [ "${DERP_TLS_MODE}" = "dns01" ]; then
       echo "DERP_DNS_PROVIDER=${DERP_DNS_PROVIDER}"
       echo "DERP_ACME_EMAIL=${DERP_ACME_EMAIL}"
@@ -392,7 +498,9 @@ EOF
   hr; log "完成"; hr
   log "  状态:    sudo systemctl status ${SERVICE_NAME}"
   log "  日志:    sudo journalctl -u ${SERVICE_NAME} -f"
-  log "  体检:    sudo ${SCRIPT_DIR}/install.sh check  （含 DERPMap 片段）"
+  log "  体检:    sudo derper-installer check     （含 DERPMap 片段）"
+  log "  改配置:  sudo derper-installer           （重跑向导，覆盖现有配置）"
+  log "  卸载:    sudo derper-installer uninstall"
 }
 
 # ---------------------------------------------------------------------------

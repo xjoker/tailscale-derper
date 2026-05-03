@@ -14,31 +14,30 @@
 curl -fsSL https://raw.githubusercontent.com/xjoker/tailscale-derper/main/scripts/install.sh | sudo sh
 ```
 
-脚本会自动按 CPU 架构（`amd64` / `arm64`）拉取最新 release，校验 SHA256（如果发布
-了 `SHA256SUMS`），解压到临时目录后进入向导：
+脚本会自动按 CPU 架构（`amd64` / `arm64`）拉取最新 release，校验 SHA256（如有
+`SHA256SUMS`），解压到临时目录后进入向导。向导依次问：
 
-- 输入 IP → 自签证书模式（无需域名）
-- 输入域名 → Let's Encrypt + DNS-01 自动申请证书
+1. **IP 或域名**：输 IP 走自签证书；输域名走 Let's Encrypt + DNS-01
+2. **HTTPS 端口**：默认 443，被占用可改 8443/8444 等；脚本会探测端口冲突并提示
+3. **STUN 端口**：默认 3478（UDP）；同机跑多实例时改成不同端口
+4. **DNS provider / 凭据 / 邮箱**（仅域名场景）
+5. **是否立即启动**
 
-向导问完会写 systemd 单元、开机自启、立即拉起服务。装完跑：
+装完后自身会复制为 `/usr/local/bin/derper-installer`，提供这些子命令：
 
 ```bash
-sudo systemctl status derper            # 查看服务状态
-sudo journalctl -u derper -f            # 跟日志
+sudo derper-installer             # 重跑向导（覆盖安装：回车保留旧值）
+sudo derper-installer check       # 体检 + DERPMap 片段
+sudo derper-installer uninstall   # 停服务、移除 binaries（保留配置和数据）
+sudo systemctl status derper      # 服务状态
+sudo journalctl -u derper -f      # 跟日志
 ```
+
+**改端口**直接 `sudo derper-installer` 重进向导改第 2 / 3 题，会先停旧服务再用新端口起，
+不需要手编 toml。**改证书凭据**也是同样路径。
 
 > Fork 仓库的话把命令里 `xjoker/tailscale-derper` 换成你的 owner。GitHub API 未登录
 > 限频 60 次/小时，遇限频可在 `curl` 命令前 `export GH_TOKEN=ghp_...` 提到 5000 次。
-
-向导会问 TLS 模式（`ip` / `dns01`）、自动探测公网 IP、按需问域名 / DNS provider / API token，
-最后写 systemd 单元并启动。装完跑一句体检：
-
-```bash
-sudo ./install.sh check               # 在解压目录里执行
-```
-
-输出包含证书 SHA-256 指纹和可粘贴到 Tailnet ACL 的 `DERPMap` 片段。卸载用
-`sudo ./install.sh uninstall`（保留 `/etc/derper` 和 `/data`）。
 
 ## 容器运行
 
