@@ -6,21 +6,29 @@
 - `dns01`：使用 `lego` 通过 DNS-01 获取域名证书，再交给 `derper` 的 `manual` 模式读取
 - 平台：`linux/amd64`、`linux/arm64`
 
-## 裸机一键起步
+## 裸机一键安装
 
-低配置 Linux（Debian/Ubuntu/RHEL 系，1C512M 起）。下面这段会调 GitHub API 解析最新
-release，按当前 CPU 架构（`amd64` / `arm64`）自动挑包，不需要手填版本号：
+低配置 Linux（Debian/Ubuntu/RHEL 系，1C512M 起）。一行命令搞定下载、解压、向导：
 
 ```bash
-ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-URL=$(curl -fsSL https://api.github.com/repos/<owner>/derper/releases/latest \
-  | grep -oE "https://[^\"]*linux-${ARCH}\.tar\.gz" | head -n1)
-curl -fsSLO "$URL" && tar -xzf "$(basename "$URL")" && cd derper-*-linux-${ARCH}
-sudo ./install.sh                     # 全交互向导，零参数
+curl -fsSL https://raw.githubusercontent.com/xjoker/tailscale-derper/main/scripts/install.sh | sudo sh
 ```
 
-> 把 `<owner>` 换成实际 GitHub 仓库 owner。未登录调用 GitHub API 有每小时 60 次限频，
-> 调试时可加 `-H "Authorization: Bearer $GH_TOKEN"` 提到 5000 次。
+脚本会自动按 CPU 架构（`amd64` / `arm64`）拉取最新 release，校验 SHA256（如果发布
+了 `SHA256SUMS`），解压到临时目录后进入向导：
+
+- 输入 IP → 自签证书模式（无需域名）
+- 输入域名 → Let's Encrypt + DNS-01 自动申请证书
+
+向导问完会写 systemd 单元、开机自启、立即拉起服务。装完跑：
+
+```bash
+sudo systemctl status derper            # 查看服务状态
+sudo journalctl -u derper -f            # 跟日志
+```
+
+> Fork 仓库的话把命令里 `xjoker/tailscale-derper` 换成你的 owner。GitHub API 未登录
+> 限频 60 次/小时，遇限频可在 `curl` 命令前 `export GH_TOKEN=ghp_...` 提到 5000 次。
 
 向导会问 TLS 模式（`ip` / `dns01`）、自动探测公网 IP、按需问域名 / DNS provider / API token，
 最后写 systemd 单元并启动。装完跑一句体检：

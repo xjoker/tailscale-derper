@@ -292,7 +292,7 @@ cmd_install() {
       [ -n "${DERP_ACME_EMAIL}" ]   || die "dns01 模式需要 DERP_ACME_EMAIL"
     fi
   else
-    [ -t 0 ] || die "向导需要 tty；批量部署请用 DERP_AUTO=1（见脚本顶部注释）"
+    [ -r /dev/tty ] || die "向导需要 tty；批量部署请用 DERP_AUTO=1（见脚本顶部注释）"
     hr; log "derper 安装向导"; hr
     wizard_host
     if [ "${DERP_TLS_MODE}" = "dns01" ]; then

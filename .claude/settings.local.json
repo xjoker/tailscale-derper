@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__yuki-memory__search",
+      "Bash(sh -n packaging/standalone/install.sh)",
+      "Bash(command -v shellcheck)",
+      "Bash(shellcheck -s sh /Users/xjoker/Developer/Repos/tailscale-derper/packaging/standalone/install.sh)",
+      "Bash(bash *)",
+      "Bash(sh -n /Users/xjoker/Developer/Repos/tailscale-derper/scripts/install.sh)",
+      "Bash(sh -n /Users/xjoker/Developer/Repos/tailscale-derper/packaging/standalone/install.sh)"
+    ]
+  }
+}
