@@ -121,9 +121,24 @@ cmd_check() {
     a="$(awk -F'=' '/^[[:space:]]*addr[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
     [ -n "${a}" ] && addr="${a}"
   fi
+  verify=""; sock=""
+  if [ -f "${CONFIG_FILE}" ]; then
+    verify="$(awk -F'=' '/^[[:space:]]*verify_clients[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
+    sock="$(awk -F'=' '/^[[:space:]]*socket[[:space:]]*=/{gsub(/[" ]/,"",$2); print $2; exit}' "${CONFIG_FILE}")"
+  fi
   log "host:    ${host:-(unset)}"
   log "mode:    ${mode:-(unset)}"
   log "addr:    ${addr}"
+  if [ "${verify}" = "true" ]; then
+    if [ -n "${sock}" ] && [ -S "${sock}" ]; then
+      log "access:  PRIVATE (verify_clients via ${sock} OK)"
+    else
+      log "access:  PRIVATE (verify_clients enabled, but ${sock:-sock} missing — derper 拒所有连接); status=1"
+      status=1
+    fi
+  else
+    log "access:  OPEN (任何 Tailscale 客户端可中继)"
+  fi
 
   if command -v systemctl >/dev/null 2>&1 && [ -f "${SERVICE_FILE}" ]; then
     state="$(systemctl is-active "${SERVICE_NAME}.service" 2>/dev/null || true)"
@@ -244,9 +259,55 @@ wizard_ports() {
   done
 }
 
+wizard_access() {
+  log ""
+  log "[4] 访问控制"
+  log "    默认：私有（仅本 Tailnet 客户端可中继；通过本机 tailscaled 校验公钥）"
+
+  DETECTED_SOCK=""
+  for s in /var/run/tailscale/tailscaled.sock /run/tailscale/tailscaled.sock; do
+    if [ -S "${s}" ]; then DETECTED_SOCK="${s}"; break; fi
+  done
+
+  if [ -n "${DETECTED_SOCK}" ]; then
+    log "    ✓ 检测到 ${DETECTED_SOCK}，启用 verify_clients"
+    log "    注意：tailscaled 需与 derper 来自同一 Tailscale revision，否则可能拒所有客户端"
+    DERP_VERIFY_CLIENTS=true
+    DERP_SOCKET="${DETECTED_SOCK}"
+    return
+  fi
+
+  log "    ✗ 未检测到 tailscaled.sock"
+  log "    要私有需先装 tailscaled 并加入你的 Tailnet:"
+  log "      curl -fsSL https://tailscale.com/install.sh | sh && sudo tailscale up"
+  log ""
+  log "    选择:"
+  log "      1) 私有（推荐；先装 tailscaled，再 sudo derper-installer 重跑向导）"
+  log "      2) 开放（任何 Tailscale 客户端可中继；会消耗带宽）"
+  while :; do
+    sel="$(ask "    选择" "1")"
+    case "${sel}" in
+      1)
+        DERP_VERIFY_CLIENTS=true
+        DERP_SOCKET=/var/run/tailscale/tailscaled.sock
+        log "    → 私有。本次启动可能因 sock 缺失被拒；装完 tailscaled 后:"
+        log "      sudo systemctl restart derper"
+        break
+        ;;
+      2)
+        DERP_VERIFY_CLIENTS=false
+        DERP_SOCKET=""
+        log "    → 开放"
+        break
+        ;;
+      *) log "    输入 1 或 2" ;;
+    esac
+  done
+}
+
 wizard_dns01() {
   log ""
-  log "[2] DNS 服务商（用于 DNS-01 验证）"
+  log "[5] DNS 服务商（用于 DNS-01 验证）"
   log "      1) cloudflare"
   log "      2) alidns      （阿里云 DNS）"
   log "      3) dnspod      （腾讯云 DNS）"
@@ -274,7 +335,7 @@ wizard_dns01() {
   done
 
   log ""
-  log "[2.1] 凭据"
+  log "[5.1] 凭据"
   existing="$(eval printf '%s' \"\${${PRIMARY}:-}\")"
   if [ -n "${existing}" ]; then
     ans="$(ask "    检测到现有 ${PRIMARY}，沿用？[Y/n]" "Y")"
@@ -304,7 +365,7 @@ wizard_dns01() {
   done
 
   log ""
-  log "[2.2] Let's Encrypt 联系邮箱（仅用于续期失败通知）"
+  log "[5.2] Let's Encrypt 联系邮箱（仅用于续期失败通知）"
   while :; do
     DERP_ACME_EMAIL="$(ask "    邮箱" "${DERP_ACME_EMAIL:-}")"
     [ -n "${DERP_ACME_EMAIL}" ] && break
@@ -373,6 +434,7 @@ cmd_install() {
   PRIMARY=""; PRIMARY_VAL=""; SEC_PAIRS=""; DERP_TLS_MODE=""
   : "${DERP_HOST:=}"; : "${DERP_DNS_PROVIDER:=}"; : "${DERP_ACME_EMAIL:=}"
   : "${DERP_ADDR:=}"; : "${DERP_STUN_PORT:=}"
+  : "${DERP_VERIFY_CLIENTS:=}"; : "${DERP_SOCKET:=}"
   START_NOW=true
 
   if to_bool "${DERP_AUTO:-}"; then
@@ -386,6 +448,7 @@ cmd_install() {
     fi
     : "${DERP_ADDR:=:443}"
     : "${DERP_STUN_PORT:=3478}"
+    : "${DERP_VERIFY_CLIENTS:=false}"
   else
     [ -r /dev/tty ] || die "向导需要 tty；批量部署请用 DERP_AUTO=1（见脚本顶部注释）"
     hr
@@ -397,6 +460,7 @@ cmd_install() {
     hr
     wizard_host
     wizard_ports
+    wizard_access
     if [ "${DERP_TLS_MODE}" = "dns01" ]; then
       wizard_dns01
     fi
@@ -415,6 +479,8 @@ cmd_install() {
     -e "s|^tls_mode[[:space:]]*=.*|tls_mode = \"${DERP_TLS_MODE}\"|" \
     -e "s|^addr[[:space:]]*=.*|addr = \"${DERP_ADDR}\"|" \
     -e "s|^stun_port[[:space:]]*=.*|stun_port = ${DERP_STUN_PORT}|" \
+    -e "s|^verify_clients[[:space:]]*=.*|verify_clients = ${DERP_VERIFY_CLIENTS}|" \
+    -e "s|^socket[[:space:]]*=.*|socket = \"${DERP_SOCKET}\"|" \
     "${CONFIG_FILE}" > "${tmp}"
   mv -f "${tmp}" "${CONFIG_FILE}"
   log "写入配置 ${CONFIG_FILE}"
@@ -428,6 +494,8 @@ cmd_install() {
     echo "DERP_HOST=${DERP_HOST}"
     echo "DERP_ADDR=${DERP_ADDR}"
     echo "DERP_STUN_PORT=${DERP_STUN_PORT}"
+    echo "DERP_VERIFY_CLIENTS=${DERP_VERIFY_CLIENTS}"
+    echo "DERP_SOCKET=${DERP_SOCKET}"
     if [ "${DERP_TLS_MODE}" = "dns01" ]; then
       echo "DERP_DNS_PROVIDER=${DERP_DNS_PROVIDER}"
       echo "DERP_ACME_EMAIL=${DERP_ACME_EMAIL}"

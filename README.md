@@ -20,8 +20,11 @@ curl -fsSL https://raw.githubusercontent.com/xjoker/tailscale-derper/main/script
 1. **IP 或域名**：输 IP 走自签证书；输域名走 Let's Encrypt + DNS-01
 2. **HTTPS 端口**：默认 443，被占用可改 8443/8444 等；脚本会探测端口冲突并提示
 3. **STUN 端口**：默认 3478（UDP）；同机跑多实例时改成不同端口
-4. **DNS provider / 凭据 / 邮箱**（仅域名场景）
-5. **是否立即启动**
+4. **访问控制**：默认**私有**——只让本机 `tailscaled` 已知的客户端中继，陌生 Tailnet
+   蹭不到带宽。脚本会探测 `tailscaled.sock`，找到就直接启用；找不到会提示先装
+   tailscaled，或显式选"开放"
+5. **DNS provider / 凭据 / 邮箱**（仅域名场景）
+6. **是否立即启动**
 
 装完后自身会复制为 `/usr/local/bin/derper-installer`，提供这些子命令：
 
