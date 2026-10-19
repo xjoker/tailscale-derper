@@ -130,15 +130,21 @@ run_lego() {
     --domains "${DERP_HOST}" --path "${DERP_ACME_PATH}"
   to_bool "${DERP_ACME_STAGING}" && set -- "$@" --server "https://acme-staging-v02.api.letsencrypt.org/directory"
 
+  # 在 if 条件里调用时 set -e 不生效，这里显式传递 lego / cp 的退出码
   if [ -f "${DERP_ACME_PATH}/certificates/${DERP_HOST}.crt" ] && \
      [ -f "${DERP_ACME_PATH}/certificates/${DERP_HOST}.key" ]; then
-    "$@" renew --days 30
+    "$@" renew --days 30 || return $?
   else
-    "$@" run
+    "$@" run || return $?
   fi
 
-  cp "${DERP_ACME_PATH}/certificates/${DERP_HOST}.crt" "${DERP_CERT_DIR}/${DERP_HOST}.crt"
-  cp "${DERP_ACME_PATH}/certificates/${DERP_HOST}.key" "${DERP_CERT_DIR}/${DERP_HOST}.key"
+  cp "${DERP_ACME_PATH}/certificates/${DERP_HOST}.crt" "${DERP_CERT_DIR}/${DERP_HOST}.crt" || return $?
+  cp "${DERP_ACME_PATH}/certificates/${DERP_HOST}.key" "${DERP_CERT_DIR}/${DERP_HOST}.key" || return $?
+}
+
+# derper 实际加载的证书 + 私钥的指纹，用于判断续期后证书是否变化
+cert_fingerprint() {
+  cat "${DERP_CERT_DIR}/${DERP_HOST}.crt" "${DERP_CERT_DIR}/${DERP_HOST}.key" 2>/dev/null | cksum
 }
 
 # ---------------------------------------------------------------------------
@@ -315,13 +321,18 @@ case "${DERP_TLS_MODE}" in
       done
 
       log "检查证书续期..."
-      if run_lego; then
-        log "证书续期成功，重启 derper"
+      CERT_BEFORE="$(cert_fingerprint)"
+      RENEW_STATUS=0
+      run_lego || RENEW_STATUS=$?
+      if [ "${RENEW_STATUS}" -ne 0 ]; then
+        log "证书续期失败 (exit code: ${RENEW_STATUS})，derper 继续使用现有证书运行"
+      elif [ "$(cert_fingerprint)" != "${CERT_BEFORE}" ]; then
+        log "证书已更新，重启 derper"
         kill -TERM "${DERPER_PID}" 2>/dev/null
         wait "${DERPER_PID}" 2>/dev/null || true
         start_derper
       else
-        log "证书未到续期窗口或续期失败，derper 继续运行"
+        log "证书未变化（未到续期窗口），derper 继续运行"
       fi
     done
     ;;

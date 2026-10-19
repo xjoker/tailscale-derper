@@ -153,7 +153,8 @@ docker logs derper 2>&1 | grep 'sha256-raw'
 
 - 启动时自动通过 `lego` 申请/续期证书
 - 运行期间每 12 小时（可通过 `DERP_RENEWAL_INTERVAL` 秒数调整）检查一次续期
-- 续期成功后自动重启 `derper` 以加载新证书
+- 只有证书实际更新时才重启 `derper` 加载新证书；证书未变化时不重启
+- 续期失败会打印 `证书续期失败 (exit code: N)`，`derper` 继续使用现有证书运行
 - 如需使用 staging 环境测试，设置 `DERP_ACME_STAGING=true`
 
 ## 健康检查
